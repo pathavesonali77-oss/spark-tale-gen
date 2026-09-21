@@ -35,6 +35,40 @@ let starts: number[] = [];
 let inFlight = 0;
 let lastStart = 0;
 
+/* --- Adaptive throttle ------------------------------------------------ *
+ * The documented 20 RPM is an upper bound; the provider's edge also rate
+ * limits bursts (HTTP 429, "error code: 1015"). When that happens every
+ * lane in the process must back off together, otherwise the retries below
+ * simply burn the whole ladder in a few seconds — which is exactly what the
+ * reported "did not render: 429" panels were. So a 429 opens a shared
+ * cooldown and permanently widens the spacing until requests succeed again.
+ */
+
+/** No request may start before this timestamp. */
+let cooldownUntil = 0;
+/** Consecutive rate-limit hits; drives both cooldown length and spacing. */
+let throttleLevel = 0;
+
+/** Current minimum gap between two request starts. */
+function spacing(): number {
+  return SPACING_MS * (1 + throttleLevel);
+}
+
+/** Record a rate-limit response so every lane slows down. */
+export function noteRateLimit(retryAfterMs?: number): number {
+  throttleLevel = Math.min(throttleLevel + 1, 5);
+  const backoff = retryAfterMs && retryAfterMs > 0
+    ? Math.min(retryAfterMs, 120_000)
+    : Math.min(5_000 * 2 ** (throttleLevel - 1), 60_000);
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + backoff);
+  return backoff;
+}
+
+/** Record a success so the throttle relaxes again. */
+export function noteImageSuccess(): void {
+  if (throttleLevel > 0) throttleLevel--;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function prune(now: number) {
@@ -44,9 +78,11 @@ function prune(now: number) {
 /** Milliseconds to wait before another request may start. 0 = go now. */
 function waitFor(now: number): number {
   prune(now);
+  if (now < cooldownUntil) return cooldownUntil - now;
   if (inFlight >= PER_KEY_CONCURRENCY) return 200;
   const sinceLast = now - lastStart;
-  if (sinceLast < SPACING_MS) return SPACING_MS - sinceLast;
+  const gap = spacing();
+  if (sinceLast < gap) return gap - sinceLast;
   if (starts.length >= IMAGE_RPM) {
     const oldest = starts[0] as number;
     return Math.max(50, WINDOW_MS - (now - oldest));
