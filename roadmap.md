@@ -12,3 +12,6 @@
 - [x] Remove forced age, gender, relationship-status, and other lead-character restrictions
 - [x] Run one small script test and show the output image
 - [x] Show parsed panel totals immediately and make Insta Kill release the screen without waiting
+- [x] Re-import project from GitHub into this workspace with keys stored as server-only secrets
+- [x] Fix 429 render failures: shared adaptive cooldown, rate-limit rounds no longer burn the retry ladder
+- [x] Allow the provider's agnes-ai.space output host through the image proxy
