@@ -11,18 +11,23 @@
  * exceeded no matter how many lanes the page runs.
  */
 
-/** Requests allowed per rolling minute (provider limit). */
-export const IMAGE_RPM = 15;
+/** Requests allowed per rolling minute (provider limit, kept just under 20). */
+export const IMAGE_RPM = 18;
 /** Rolling window length. */
 const WINDOW_MS = 60_000;
-/** Safety margin so clock drift never pushes a request over the edge. */
-const SPACING_MS = Math.ceil(WINDOW_MS / IMAGE_RPM) + 100; // ~3.1s between starts
+/**
+ * Minimum gap between two request starts. Kept small on purpose: the rolling
+ * 18/minute window below is the real budget, so several renders may run side by
+ * side instead of the queue trickling one image every three seconds.
+ */
+const SPACING_MS = 700;
 
 /**
- * How many renders may be in flight at once. A render can take tens of
- * seconds; more than this in parallel buys nothing once 20 RPM is the ceiling.
+ * How many renders may be in flight at once. A render takes ~10s, so four
+ * lanes keep the minute budget busy without ever exceeding it.
  */
-export const PER_KEY_CONCURRENCY = 1;
+export const PER_KEY_CONCURRENCY = 4;
+
 
 export function agnesKey(): string {
   const key = process.env["AGNES_API_KEY"]?.trim();
