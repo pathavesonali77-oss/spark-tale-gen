@@ -12,7 +12,7 @@
  */
 
 /** Requests allowed per rolling minute (provider limit). */
-export const IMAGE_RPM = 20;
+export const IMAGE_RPM = 15;
 /** Rolling window length. */
 const WINDOW_MS = 60_000;
 /** Safety margin so clock drift never pushes a request over the edge. */
@@ -22,7 +22,7 @@ const SPACING_MS = Math.ceil(WINDOW_MS / IMAGE_RPM) + 100; // ~3.1s between star
  * How many renders may be in flight at once. A render can take tens of
  * seconds; more than this in parallel buys nothing once 20 RPM is the ceiling.
  */
-export const PER_KEY_CONCURRENCY = 4;
+export const PER_KEY_CONCURRENCY = 1;
 
 export function agnesKey(): string {
   const key = process.env["AGNES_API_KEY"]?.trim();
