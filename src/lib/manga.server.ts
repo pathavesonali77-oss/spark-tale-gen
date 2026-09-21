@@ -1,5 +1,5 @@
 import type { Segment } from "./script";
-import { withImageKey } from "./keys.server";
+import { withImageKey, noteRateLimit, noteImageSuccess } from "./keys.server";
 import {
   parsePanelPlan,
   panelDirective,
@@ -2225,11 +2225,18 @@ export async function generateImage(
 
 
   let lastErr = "";
-  for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
+  // A rate-limit answer is not a failed render — it means "not yet". Those
+  // rounds are waited out instead of spending one of the real attempts, so a
+  // busy free tier no longer burns the whole retry ladder in a few seconds.
+  const maxAttempts = Math.max(1, attempts);
+  let attempt = 0;
+  let rateLimited = 0;
+  while (attempt < maxAttempts && rateLimited < 8) {
     // A killed run never spends another image credit.
     assertActive();
-    // withImageKey owns the provider's 20 requests-per-minute budget: this
-    // waits for a free slot, so the free tier is never exceeded.
+    let throttled = false;
+    // withImageKey owns the provider's request budget: this waits for a free
+    // slot (including any shared cooldown), so the free tier is respected.
     const url = await withImageKey(slot, attempt, async (key) => {
       const gate = killableSignal(IMAGE_REQUEST_TIMEOUT_MS);
       try {
@@ -2259,11 +2266,19 @@ export async function generateImage(
           };
           const out = json.data?.[0]?.url ?? undefined;
           if (out) {
-            if (await isRealImage(out)) return out;
+            if (await isRealImage(out)) {
+              noteImageSuccess();
+              return out;
+            }
             lastErr = "blank image rejected";
           } else {
             lastErr = "no output url";
           }
+        } else if (res.status === 429 || res.status === 503) {
+          const retryAfter = Number(res.headers.get("retry-after"));
+          const waitMs = noteRateLimit(Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined);
+          throttled = true;
+          lastErr = `${res.status} rate limited, waiting ${Math.round(waitMs / 1000)}s`;
         } else {
           lastErr = `${res.status} ${await res.text().catch(() => "")}`.slice(0, 300);
         }
@@ -2279,6 +2294,14 @@ export async function generateImage(
       return null;
     });
     if (url) return url;
+    if (throttled) {
+      rateLimited++;
+      // withImageKey already holds the shared cooldown; a short breather keeps
+      // the lanes from re-entering it all at the same instant.
+      await pause(250 + rateLimited * 250);
+      continue;
+    }
+    attempt++;
     // Short breather only: long back-offs made panels look stuck.
     await pause(100);
   }
