@@ -2274,13 +2274,34 @@ export async function generateImage(
           } else {
             lastErr = "no output url";
           }
-        } else if (res.status === 429 || res.status === 503) {
-          const retryAfter = Number(res.headers.get("retry-after"));
-          const waitMs = noteRateLimit(Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined);
-          throttled = true;
-          lastErr = `${res.status} rate limited, waiting ${Math.round(waitMs / 1000)}s`;
         } else {
-          lastErr = `${res.status} ${await res.text().catch(() => "")}`.slice(0, 300);
+          const errorBody = await res.text().catch(() => "");
+          // Agnes' Cloudflare edge sometimes reports error 1015 as HTTP 403,
+          // not 429. Treat the response body as authoritative so that case
+          // joins the shared cooldown instead of burning ordinary retries.
+          const limited =
+            res.status === 429 ||
+            res.status === 503 ||
+            /error code:?\s*1015|too many requests|rate[ -]?limit|temporarily overloaded/i.test(errorBody);
+          if (limited) {
+            const retryAfterHeader = res.headers.get("retry-after");
+            const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN;
+            const retryAfterDate = retryAfterHeader ? Date.parse(retryAfterHeader) : Number.NaN;
+            const headerWait = Number.isFinite(retryAfterSeconds)
+              ? retryAfterSeconds * 1000
+              : Number.isFinite(retryAfterDate)
+                ? Math.max(0, retryAfterDate - Date.now())
+                : undefined;
+            // Cloudflare 1015 is a rolling-window block. Give it a full minute
+            // when no longer Retry-After is supplied; short retries prolong it.
+            const waitMs = noteRateLimit(
+              /1015/.test(errorBody) ? Math.max(headerWait ?? 0, 60_000) : headerWait,
+            );
+            throttled = true;
+            lastErr = `${res.status} rate limited, waiting ${Math.round(waitMs / 1000)}s`;
+          } else {
+            lastErr = `${res.status} ${errorBody}`.slice(0, 300);
+          }
         }
         if (lastErr) console.warn(`[agnes] seed=${seed} attempt ${attempt + 1}: ${lastErr}`);
       } catch (e) {
