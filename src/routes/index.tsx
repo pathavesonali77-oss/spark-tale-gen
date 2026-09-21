@@ -117,10 +117,12 @@ const PROMPT_RANGE = 15;
  * (src/lib/keys.server.ts), so a few client lanes simply keep the queue fed
  * without ever racing past the limit.
  */
-// One browser lane keeps the account-wide free-tier limit intact even when
-// server functions land in separate isolated workers whose memory is not shared.
-const IMAGE_CONCURRENCY = 1;
-const IMAGE_BATCH = 1;
+// Four browser lanes, two panels per request: the server still owns the
+// account-wide per-minute budget, so this only keeps that budget saturated
+// instead of drawing one picture at a time.
+const IMAGE_CONCURRENCY = 4;
+const IMAGE_BATCH = 2;
+
 /**
  * The server already downloads and validates every finished image (complete
  * file + entropy) before returning its URL, so re-downloading and decoding it
